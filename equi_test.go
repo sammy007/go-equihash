@@ -20,4 +20,11 @@ func TestEthashVerifyWithTargetInvalid(t *testing.T) {
 	if Verify(h, sol) {
 		t.Errorf("Must be incorrect solution")
 	}
+
+	h[0] = byte(4)
+	sol[0] = byte(1)
+
+	if Verify(h, sol) {
+		t.Errorf("Must be incorrect solution")
+	}
 }
