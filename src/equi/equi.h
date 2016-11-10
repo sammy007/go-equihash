@@ -2,6 +2,7 @@
  * Copyright (c) 2016 abc at openwall dot com
  * Copyright (c) 2016 Jack Grigg
  * Copyright (c) 2016 The Zcash developers
+ * Copyright (c) 2016 John Tromp
  *
  * Distributed under the MIT software license, see the accompanying
  * file COPYING or http://www.opensource.org/licenses/mit-license.php.
@@ -14,20 +15,26 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <assert.h>
+#include <stdlib.h>
 
 #include <sodium.h>
 
 #include "endian.h"
 
-static void digestInit(crypto_generichash_blake2b_state *S, const int n, const int k) {
-  uint32_t le_N = htole32(n);
-  uint32_t le_K = htole32(k);
+#define N 200
+#define K 9
+
+static const uint32_t PROOFSIZE = 1 << K;
+static const uint32_t le_N = htole32(N);
+static const uint32_t le_K = htole32(K);
+
+static void digestInit(crypto_generichash_blake2b_state *S) {
   unsigned char personalization[crypto_generichash_blake2b_PERSONALBYTES] = {};
   memcpy(personalization, "ZcashPoW", 9);
   memcpy(personalization + 8,  &le_N, 4);
   memcpy(personalization + 12, &le_K, 4);
   crypto_generichash_blake2b_init_salt_personal(S,
-    NULL, 0, (512 / n) * n / 8, NULL, personalization);
+    NULL, 0, (PROOFSIZE / N) * N / 8, NULL, personalization);
 }
 
 static void expandArray(const unsigned char *in, const size_t in_len,
@@ -90,35 +97,53 @@ static void generateHash(crypto_generichash_blake2b_state *S, const uint32_t g, 
   crypto_generichash_blake2b_final(&digest, hash, hashLen);
 }
 
+int compu32(const void *pa, const void *pb) {
+  uint32_t a = *(uint32_t *)pa, b = *(uint32_t *)pb;
+  return a < b ? -1 : a == b ? 0 : +1;
+}
+
+bool duplicate(uint32_t prf[PROOFSIZE]) {
+  uint32_t sortprf[PROOFSIZE];
+  memcpy(sortprf, prf, sizeof(uint32_t[PROOFSIZE]));
+  qsort(sortprf, PROOFSIZE, sizeof(uint32_t), &compu32);
+
+  for (uint32_t i = 1; i < PROOFSIZE; i++)
+    if (sortprf[i] <= sortprf[i-1])
+      return true;
+  return false;
+}
+
 // hdr -> header including nonce (140 bytes)
 // soln -> equihash solution (excluding 3 bytes with size, so 1344 bytes length)
 bool verify(const char *hdr, const char *soln) {
-  const int n = 200;
-  const int k = 9;
-  const int collisionBitLength  = n / (k + 1);
+  const int collisionBitLength  = N / (K + 1);
   const int collisionByteLength = (collisionBitLength + 7) / 8;
-  const int hashLength = (k + 1) * collisionByteLength;
-  const int indicesPerHashOutput = 512 / n;
-  const int hashOutput = indicesPerHashOutput * n / 8;
-  const int equihashSolutionSize = (1 << k) * (n / (k + 1) + 1) / 8;
-  const int solnr = 1 << k;
-  uint32_t indices[512];
+  const int hashLength = (K + 1) * collisionByteLength;
+  const int indicesPerHashOutput = PROOFSIZE / N;
+  const int hashOutput = indicesPerHashOutput * N / 8;
+  const int equihashSolutionSize = (1 << K) * (N / (K + 1) + 1) / 8;
+
+  uint32_t indices[PROOFSIZE];
 
   crypto_generichash_blake2b_state state;
-  digestInit(&state, n, k);
+  digestInit(&state);
   crypto_generichash_blake2b_update(&state, hdr, 140);
-  
+
   expandArray(soln, equihashSolutionSize, (char *)&indices, sizeof(indices), collisionBitLength + 1, 1);
 
   uint8_t vHash[hashLength];
   memset(vHash, 0 , sizeof(vHash));
-  for (int j = 0; j < solnr; j++) {
-  	uint8_t tmpHash[hashOutput];
-  	uint8_t hash[hashLength];
-  	int i = be32toh(indices[j]);
-  	generateHash(&state, i / indicesPerHashOutput, tmpHash, hashOutput);
-  	expandArray(tmpHash + (i % indicesPerHashOutput * n / 8), n / 8, hash, hashLength, collisionBitLength, 0);
-  	for (int k = 0; k < hashLength; ++k)
+
+  if (duplicate(indices))
+    return false;
+
+  for (int j = 0; j < PROOFSIZE; j++) {
+    uint8_t tmpHash[hashOutput];
+    uint8_t hash[hashLength];
+    int i = be32toh(indices[j]);
+    generateHash(&state, i / indicesPerHashOutput, tmpHash, hashOutput);
+    expandArray(tmpHash + (i % indicesPerHashOutput * N / 8), N / 8, hash, hashLength, collisionBitLength, 0);
+    for (int k = 0; k < hashLength; ++k)
   	    vHash[k] ^= hash[k];
   }
   return isZero(vHash, sizeof(vHash));
