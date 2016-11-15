@@ -143,6 +143,10 @@ bool verify(const char *hdr, const char *soln) {
     int i = be32toh(indices[j]);
     generateHash(&state, i / indicesPerHashOutput, tmpHash, hashOutput);
     expandArray(tmpHash + (i % indicesPerHashOutput * N / 8), N / 8, hash, hashLength, collisionBitLength, 0);
+
+    if ((j % 2 == 0) && !(i < be32toh(indices[j+1])))
+      return false;
+
     for (int k = 0; k < hashLength; ++k)
   	    vHash[k] ^= hash[k];
   }
